@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 from typing import Annotated, Sequence, TypedDict, Literal
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
@@ -9,6 +11,8 @@ from prompt_library.prompts import PROMPT_REGISTRY, PromptType
 from retriever.retrieval import Retriever
 from utils.model_loader import ModelLoader
 
+from tavily import TavilyClient
+
 
 class AgenticRAG:
     """Agentic RAG pipeline using LangGraph."""
@@ -17,11 +21,15 @@ class AgenticRAG:
         messages: Annotated[Sequence[BaseMessage], add_messages]
 
     def __init__(self):
+        
+        load_dotenv()
+        
         self.retriever_obj = Retriever()
         self.model_loader = ModelLoader()
         self.llm = self.model_loader.load_llm()
         self.workflow = self._build_workflow()
         self.app = self.workflow.compile()
+        self.tavily_api_key = os.getenv("TAVILY_API_KEY")
 
     # ---------- Helpers ----------
     def _format_docs(self, docs) -> str:
@@ -63,7 +71,7 @@ class AgenticRAG:
         context = self._format_docs(docs)
         return {"messages": [HumanMessage(content=context)]}
 
-    def _grade_documents(self, state: AgentState) -> Literal["generator", "rewriter"]:
+    def _grade_documents(self, state: AgentState) -> Literal["generator", "websearch"]:
         print("--- GRADER ---")
         question = state["messages"][0].content
         docs = state["messages"][-1].content
@@ -75,7 +83,7 @@ class AgenticRAG:
         )
         chain = prompt | self.llm | StrOutputParser()
         score = chain.invoke({"question": question, "docs": docs})
-        return "generator" if "yes" in score.lower() else "rewriter"
+        return "generator" if "yes" in score.lower() else "websearch"
 
     def _generate(self, state: AgentState):
         print("--- GENERATE ---")
@@ -88,6 +96,18 @@ class AgenticRAG:
         response = chain.invoke({"context": docs, "question": question})
         return {"messages": [HumanMessage(content=response)]}
 
+    def _web_search(self, state: AgentState):
+        print("--- WEB SEARCH ---")
+        question = state["messages"][0].content
+        print("question:", question)
+        if not self.tavily_api_key:
+            return {"messages": [HumanMessage(content="Web search API key not configured.")]}
+        
+        tavily_client = TavilyClient(api_key=self.tavily_api_key)
+        print("Tavily client initialized.")
+        response = tavily_client.search(question, country="India", language="en")
+        return {"messages": [HumanMessage(content=response['results'][0]['content'])]}
+    
     def _rewrite(self, state: AgentState):
         print("--- REWRITE ---")
         question = state["messages"][0].content
@@ -102,7 +122,8 @@ class AgenticRAG:
         workflow.add_node("Assistant", self._ai_assistant)
         workflow.add_node("Retriever", self._vector_retriever)
         workflow.add_node("Generator", self._generate)
-        workflow.add_node("Rewriter", self._rewrite)
+        workflow.add_node("Websearch", self._web_search)
+        #workflow.add_node("Rewriter", self._rewrite)
 
         workflow.add_edge(START, "Assistant")
         workflow.add_conditional_edges(
@@ -113,10 +134,11 @@ class AgenticRAG:
         workflow.add_conditional_edges(
             "Retriever",
             self._grade_documents,
-            {"generator": "Generator", "rewriter": "Rewriter"},
+            {"generator": "Generator", "websearch": "Websearch"},
         )
         workflow.add_edge("Generator", END)
-        workflow.add_edge("Rewriter", "Assistant")
+        workflow.add_edge("Websearch", END)
+        #workflow.add_edge("Rewriter", "Assistant")
         return workflow
 
     # ---------- Public Run ----------

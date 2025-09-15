@@ -35,16 +35,17 @@ class Retriever:
         self.db_application_token = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
         self.db_keyspace = os.getenv("ASTRA_DB_KEYSPACE")
         
-    def load_retriever(self):
+    def load_retriever(self,coll_name='ecommercedata'):
         """Load the AstraDB retriever.
         """
         
         if not self.vstore:
-            collection_name = self.config["astra_db"]["collection_name"]
+            coll_name = self.config["astra_db"]["collection_name"]
+            print(coll_name)
         
         self.vstore = AstraDBVectorStore(
             embedding=self.model_loader.load_embeddings(),
-            collection_name=collection_name,
+            collection_name=coll_name,
             api_endpoint=self.db_api_endpoint,
             token=self.db_application_token,
             namespace=self.db_keyspace,
